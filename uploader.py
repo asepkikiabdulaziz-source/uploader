@@ -33,12 +33,12 @@ TABLE_ID = "berjalan"
 
 # --- MAPPING KOLOM ---
 EXCEL_TO_BQ_MAP = {
-    "TGL": "tgl", "NO_FAKTUR": "no_faktur", "KODE OUTLET": "kode_outlet",
+    "TGL": "tgl", "NO FAKTUR": "no_faktur", "KODE OUTLET": "kode_outlet",
     "NAMA OUTLET": "nama_outlet", "CHANNEL": "channel", "FC": "fc",
     "RUTE": "rute", "PMA": "pma", "KODE SALESMAN": "kode_salesman",
     "KD_BRG": "kd_brg", "NM_BRG": "nm_brg", "BU": "bu", "MARK": "mark",
     "KODE BARANG": "kode_barang", "DESCRIPTION": "description", "QTY": "qty",
-    "VALUE": "value", "VALUE_NETT": "value_nett", "BLN": "bln",
+    "VALUE": "value", "VALUE NETT": "value_nett", "BLN": "bln",
     "KD SLS2": "kd_sls2", "DIV": "div"
 }
 
@@ -170,4 +170,5 @@ if uploaded_files:
             
     except Exception as e:
         st.error(f"Error: {e}")
+
 
