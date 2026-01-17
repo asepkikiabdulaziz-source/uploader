@@ -8,7 +8,7 @@ from google.cloud import storage, bigquery
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Dbase Uploader", page_icon="📦")
-st.title("📦 DBASE UPLOADER ")
+st.title("📦 DBASE UPLOADER")
 st.caption("Mode: Estafet (Hemat RAM) + Schema Permanen")
 
 # --- AUTHENTICATION ---
@@ -171,5 +171,3 @@ if uploaded_files:
             st.balloons()
         else:
             st.error("Tidak ada file yang berhasil diproses.")
-
-
