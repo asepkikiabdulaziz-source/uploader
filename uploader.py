@@ -27,9 +27,9 @@ except Exception as e:
     st.stop()
 
 # --- KONFIGURASI ---
-BUCKET_NAME = "sfa-history-staging" 
+BUCKET_NAME = "transaksi-upload" 
 DATASET_ID = "pma"
-TABLE_ID = "staging_all_prc"
+TABLE_ID = "berjalan"
 
 # --- MAPPING & SCHEMA ---
 EXCEL_TO_BQ_MAP = {
@@ -171,4 +171,5 @@ if uploaded_files:
             st.balloons()
         else:
             st.error("Tidak ada file yang berhasil diproses.")
+
 
