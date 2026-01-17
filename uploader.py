@@ -6,12 +6,12 @@ import tempfile
 import gc
 from google.cloud import storage, bigquery
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Dbase Uploader", page_icon="📦")
-st.title("📦 DBASE UPLOADER")
-st.caption("Mode: Qty, Value, Nett = Desimal (Float)")
+# --- CONFIG ---
+st.set_page_config(page_title="SFA Uploader", page_icon="📦")
+st.title("📦 SFA UPLOADER (BATCH MODE)")
+st.caption("Logika: Reset Tabel > Upload Semua > Load Sekali")
 
-# --- AUTHENTICATION ---
+# --- AUTH ---
 try:
     if "gcp_service_account" in st.secrets:
         service_account_info = st.secrets["gcp_service_account"]
@@ -41,7 +41,7 @@ EXCEL_TO_BQ_MAP = {
     "KD SLS2": "kd_sls2", "DIV": "div"
 }
 
-# --- SCHEMA DEFINITION (ALL FLOAT) ---
+# --- SCHEMA (ALL FLOAT) ---
 BQ_SCHEMA = [
     bigquery.SchemaField("tgl", "DATE"),
     bigquery.SchemaField("no_faktur", "STRING"),
@@ -58,131 +58,134 @@ BQ_SCHEMA = [
     bigquery.SchemaField("mark", "STRING"),
     bigquery.SchemaField("kode_barang", "STRING"),
     bigquery.SchemaField("description", "STRING"),
-    
-    # KEMBALI KE FLOAT SEMUA (SESUAI REQUEST)
     bigquery.SchemaField("qty", "FLOAT"), 
     bigquery.SchemaField("value", "FLOAT"), 
     bigquery.SchemaField("value_nett", "FLOAT"),
-    
     bigquery.SchemaField("bln", "STRING"),
     bigquery.SchemaField("kd_sls2", "STRING"),
     bigquery.SchemaField("div", "STRING"),
 ]
 
-st.info("💡 Semua kolom angka (Qty, Value, Nett) akan disimpan sebagai FLOAT.")
 uploaded_files = st.file_uploader("Upload File", type=['xlsx', 'xls'], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.button("MULAI PROSES"):
+    st.info(f"📂 Terdeteksi {len(uploaded_files)} file siap proses.")
+    
+    if st.button("MULAI PROSES BATCH 🚀"):
         progress_bar = st.progress(0)
         status = st.empty()
         
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
+        bq_client = bigquery.Client()
+        table_ref = f"{DATASET_ID}.{TABLE_ID}"
+
+        # ==========================================
+        # PHASE 1: PREPARATION (RESET DI AWAL)
+        # ==========================================
+        status.text("🛑 Menghapus Tabel Lama & Membersihkan Bucket...")
         
-        # Bersihkan Bucket
+        # 1. Hapus Tabel BigQuery Dulu (Supaya bersih total)
+        bq_client.delete_table(table_ref, not_found_ok=True)
+        
+        # 2. Hapus File Sampah di Bucket GCS
         blobs = bucket.list_blobs(prefix="upload/")
         for blob in blobs: blob.delete()
         
+        progress_bar.progress(10)
+
+        # ==========================================
+        # PHASE 2: LOOPING UPLOAD (ESTAFET)
+        # ==========================================
         success_count = 0
         total_files = len(uploaded_files)
 
         for i, file in enumerate(uploaded_files):
             try:
-                status.text(f"⏳ Processing {i+1}/{total_files}: {file.name}")
+                status.text(f"📤 Mengirim File {i+1} dari {total_files}: {file.name}")
                 
                 # Baca Excel
                 df = pd.read_excel(file, dtype=object, engine='openpyxl')
                 
-                # Mapping Header
+                # Mapping & Filter
                 df.columns = df.columns.str.strip().str.upper()
                 df.rename(columns=EXCEL_TO_BQ_MAP, inplace=True)
-                
-                # Filter Kolom
                 valid_cols = [f.name for f in BQ_SCHEMA if f.name in df.columns]
                 df = df[valid_cols]
 
-                # --- CLEANING & FORMATTING (ALL FLOAT) ---
-                
-                # 1. DATE
+                # --- CLEANING (ALL FLOAT) ---
                 if 'tgl' in df.columns:
                     df['tgl'] = pd.to_datetime(df['tgl'], errors='coerce').dt.date
 
-                # 2. NUMERIC (FORCE FLOAT SEMUA)
-                # Qty, Value, Value Nett dipaksa jadi Desimal (100.0)
                 numeric_cols = ['qty', 'value', 'value_nett']
                 for nc in numeric_cols:
                     if nc in df.columns:
-                        # Ubah ke numeric (handle string '1,000')
-                        df[nc] = pd.to_numeric(df[nc], errors='coerce')
-                        # Isi kosong dengan 0.0
-                        df[nc] = df[nc].fillna(0.0)
-                        # Paksa jadi FLOAT (Desimal)
-                        df[nc] = df[nc].astype(float) 
+                        df[nc] = pd.to_numeric(df[nc], errors='coerce').fillna(0.0).astype(float)
 
-                # 3. STRING (SISANYA)
                 non_string = ['tgl'] + numeric_cols
                 str_cols = [c for c in df.columns if c not in non_string]
-                
                 for sc in str_cols:
-                    # Bersihkan .0 di belakang string text (misal BLN "10.0" -> "10")
                     df[sc] = df[sc].astype(str).str.strip().replace('nan', '').str.replace(r'\.0$', '', regex=True)
                     if sc in ['pma', 'channel', 'kode_outlet', 'no_faktur', 'fc']: 
                         df[sc] = df[sc].str.upper()
 
-                # Save Parquet
+                # Save Partial Parquet
                 temp_filename = f"part_{i}.parquet"
                 df.to_parquet(temp_filename, index=False)
                 
+                # Upload ke GCS
                 blob = bucket.blob(f"upload/{temp_filename}")
                 blob.upload_from_filename(temp_filename)
                 
+                # Hapus Memori
                 os.remove(temp_filename)
                 del df
                 gc.collect()
                 
                 success_count += 1
-                progress_bar.progress(int((i+1) / total_files * 80))
+                
+                # Update Progress Bar (10% - 90%)
+                current_progress = 10 + int((i+1) / total_files * 80)
+                progress_bar.progress(current_progress)
                 
             except Exception as e:
-                st.error(f"Gagal {file.name}: {e}")
+                st.error(f"❌ Gagal di file {file.name}: {e}")
 
+        # ==========================================
+        # PHASE 3: FINAL LOAD (HANYA SEKALI DI AKHIR)
+        # ==========================================
         if success_count > 0:
-            status.text("Upload ke BigQuery...")
-            bq_client = bigquery.Client()
+            status.text("📥 Memasukkan SEMUA Data ke BigQuery...")
             
-            # --- RESET TABEL (PENTING) ---
-            # Hapus tabel lama agar schema berubah dari INTEGER kembali ke FLOAT
-            try:
-                table_ref = f"{DATASET_ID}.{TABLE_ID}"
-                bq_client.delete_table(table_ref, not_found_ok=True)
-                status.text("Tabel lama di-reset untuk schema FLOAT...")
-            except Exception:
-                pass
-
             job_config = bigquery.LoadJobConfig(
                 source_format=bigquery.SourceFormat.PARQUET,
-                write_disposition="WRITE_TRUNCATE",
-                schema=BQ_SCHEMA, # Schema sudah FLOAT semua
+                write_disposition="WRITE_TRUNCATE", # Aman karena tabel sudah kosong/baru
+                schema=BQ_SCHEMA,
                 autodetect=False 
             )
             
+            # Perintah ini mengambil SEMUA file *.parquet yang tadi kita upload
             load_job = bq_client.load_table_from_uri(
                 f"gs://{BUCKET_NAME}/upload/*.parquet", 
-                f"{DATASET_ID}.{TABLE_ID}", 
+                table_ref, 
                 job_config=job_config
             )
             
             try:
-                load_job.result()
+                load_job.result() # Tunggu sampai selesai
+                
+                # Cleanup Akhir
+                status.text("🧹 Membersihkan sisa file...")
+                blobs = bucket.list_blobs(prefix="upload/")
+                for blob in blobs: blob.delete()
+                
                 progress_bar.progress(100)
-                st.success("✅ SUKSES! Data Masuk (Format FLOAT).")
+                st.success(f"🎉 SUKSES TOTAL! {success_count} File berhasil digabung dan masuk ke BigQuery.")
                 st.balloons()
+                
             except Exception as e:
-                st.error("BigQuery Error Details:")
+                st.error("BigQuery Error:")
                 if hasattr(e, 'errors'): st.json(e.errors)
                 else: st.write(e)
-            
-            # Cleanup
-            blobs = bucket.list_blobs(prefix="upload/")
-            for blob in blobs: blob.delete()
+        else:
+            st.error("Tidak ada file yang berhasil diproses.")
