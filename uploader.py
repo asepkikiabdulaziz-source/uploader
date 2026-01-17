@@ -7,7 +7,7 @@ from google.cloud import storage, bigquery
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="SFA Bulk Uploader", page_icon="📦")
-st.title("📦 SFA BULK UPLOADER")
+st.title("📦 DBASE UPLOADER")
 st.caption("Support: 60+ File Sekaligus | Auto-Merge")
 
 # --- AUTHENTICATION ---
@@ -153,3 +153,4 @@ if uploaded_files:
             
     except Exception as e:
         st.error(f"Error: {e}")
+
