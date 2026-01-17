@@ -110,7 +110,7 @@ if uploaded_files:
                 for col in df.columns:
                     if col == 'tgl':
                         df[col] = pd.to_datetime(df[col], errors='coerce').dt.date
-                    elif col in ['qty', 'value', 'value_nett']:
+                    elif col in ['value', 'value_nett']:
                         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                     else:
                         df[col] = df[col].astype(str).str.strip().replace('nan', '').str.replace(r'\.0$', '', regex=True)
@@ -171,3 +171,4 @@ if uploaded_files:
             st.balloons()
         else:
             st.error("Tidak ada file yang berhasil diproses.")
+
