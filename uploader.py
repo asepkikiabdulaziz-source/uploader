@@ -39,7 +39,7 @@ EXCEL_TO_BQ_MAP = {
     "KD_BRG": "kd_brg", "NM_BRG": "nm_brg", "BU": "bu", "MARK": "mark",
     "KODE BARANG": "kode_barang", "DESCRIPTION": "description", "QTY": "qty",
     "VALUE": "value", "VALUE_NETT": "value_nett", "BLN": "bln",
-    "KD_SLS2": "kd_sls2", "DIV": "div"
+    "KD SLS2": "kd_sls2", "DIV": "div"
 }
 
 # --- ATURAN KETAT TIPE DATA ---
@@ -170,3 +170,4 @@ if uploaded_files:
             
     except Exception as e:
         st.error(f"Error: {e}")
+
