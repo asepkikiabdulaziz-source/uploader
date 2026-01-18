@@ -4,6 +4,7 @@ import os
 import json
 import tempfile
 import gc
+import math
 from datetime import datetime, timedelta
 from google.cloud import storage, bigquery
 
@@ -11,7 +12,7 @@ from google.cloud import storage, bigquery
 # 1. KONFIGURASI HALAMAN
 # ==========================================
 st.set_page_config(
-    page_title="Data Uploader", 
+    page_title="DBASE UPLOADER", 
     page_icon="🏢", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -39,8 +40,9 @@ except Exception as e:
 # ==========================================
 BUCKET_NAME = "transaksi-upload" 
 DATASET_ID = "pma"
+BATCH_SIZE = 5  # <--- JUMLAH FILE PER PROSES (Supaya Kuat)
 
-# --- A. SCHEMA TRANSAKSI (PENJUALAN) ---
+# --- SCHEMA DEFINITIONS (SAMA SEPERTI SEBELUMNYA) ---
 MAP_TRX = {
     "TGL": "tgl", "NO FAKTUR": "no_faktur", "KODE OUTLET": "kode_outlet",
     "NAMA OUTLET": "nama_outlet", "CHANNEL": "channel", "FC": "fc",
@@ -75,7 +77,6 @@ SCHEMA_TRX = [
     bigquery.SchemaField("div", "STRING"),
 ]
 
-# --- B. SCHEMA MASTER CUSTOMER (CB) ---
 MAP_CUST = {
     'KODE OUTLET': 'kode_outlet', 'NAMA OUTLET': 'nama_outlet', 'FC': 'fc',
     'ALAMAT': 'alamat', 'KET.KABUPATEN': 'kabupaten', 'KET.KECAMATAN': 'kecamatan',
@@ -98,7 +99,7 @@ SCHEMA_CUST = [
     bigquery.SchemaField("flag", "STRING"),
     bigquery.SchemaField("tgl_register", "DATE"),
     bigquery.SchemaField("rayon", "STRING"),
-    bigquery.SchemaField("kd_salesman", "STRING"), # WAJIB STRING
+    bigquery.SchemaField("kd_salesman", "STRING"),
     bigquery.SchemaField("nama_salesman", "STRING"),
     bigquery.SchemaField("pma", "STRING"),
     bigquery.SchemaField("plan", "STRING"),
@@ -110,8 +111,8 @@ SCHEMA_CUST = [
 # 4. SIDEBAR NAVIGASI
 # ==========================================
 with st.sidebar:
-    st.title("🏢 Admin Upload")
-    st.write("Pilih Modul:")
+    st.title("🏢 Admin")
+    st.write("Pilih Mode:")
     
     selected_mode = st.radio(
         "Menu Navigasi",
@@ -119,252 +120,225 @@ with st.sidebar:
     )
     
     st.divider()
-    
-    # Opsi Tambahan
     show_preview = st.checkbox("Tampilkan Preview Data", value=True)
     
-    # Checkbox Khusus Mode History
     force_overwrite = False
     if selected_mode == "📚 Closing":
         st.markdown("---")
         st.caption("⚙️ Opsi History")
-        force_overwrite = st.checkbox("⚠️ Mode Revisi (Timpa Data)", value=False, help="Centang ini jika ingin menghapus data lama di tanggal yang sama.")
+        force_overwrite = st.checkbox("⚠️ Mode Revisi (Timpa Data)", value=False)
         if force_overwrite:
-            st.warning("Mode Revisi AKTIF. Data lama yang bentrok tanggalnya akan DIHAPUS.")
+            st.warning("Mode Revisi AKTIF.")
 
-    st.caption("vFinal - Enterprise Grade")
+    st.caption("v6.0 - Batch Processing")
 
 # ==========================================
-# 5. LOGIC SWITCHER (PENGATUR MODE)
+# 5. LOGIC SWITCHER
 # ==========================================
 active_map = {}
 active_schema = []
 target_table = ""
 enable_date_filter = False
-check_collision = False # Cek Duplikat ke BigQuery
+check_collision = False
 
 # --- MODE 1: TRANSAKSI HARIAN ---
 if selected_mode == "🚀 Berjalan":
     st.title("🚀 Berjalan")
-    st.info("Mode ini memiliki **Filter Tanggal**. Data masa depan akan dibuang. Tabel target akan di-RESET.")
-    
-    active_map = MAP_TRX
-    active_schema = SCHEMA_TRX
-    target_table = "berjalan"
-    enable_date_filter = True 
-    check_collision = False
+    active_map = MAP_TRX; active_schema = SCHEMA_TRX; target_table = "berjalan"
+    enable_date_filter = True; check_collision = False
     
     col1, col2 = st.columns([1, 3])
     with col1:
         default_date = datetime.now().date() - timedelta(days=1)
         cutoff_date = st.date_input("🛑 Cut-off Tanggal", value=default_date)
     with col2:
-        st.write(f"Sistem hanya menerima data s/d tanggal **{cutoff_date.strftime('%d %b %Y')}**.")
+        st.write(f"Data > **{cutoff_date}** akan dibuang.")
 
 # --- MODE 2: MASTER CUSTOMER (CB) ---
 elif selected_mode == "👥 Master Customer (CB)":
     st.title("👥 Upload Master Customer (CB)")
-    st.warning("⚠️ **PERHATIAN:** Mode ini akan **MENIMPA (REPLACE)** seluruh data Customer lama.")
-    st.markdown("Logic Khusus: `KD_SLS` String, `BLN`='JAN'.")
-    
-    active_map = MAP_CUST
-    active_schema = SCHEMA_CUST
-    target_table = "staging_cb"
-    enable_date_filter = False 
-    check_collision = False
+    active_map = MAP_CUST; active_schema = SCHEMA_CUST; target_table = "staging_cb"
+    enable_date_filter = False; check_collision = False
 
 # --- MODE 3: HISTORY ---
 elif selected_mode == "📚 Closing":
-    st.title("📚 CLosing")
-    st.info("Mode ini **MENAMBAH (APPEND)** data. Fitur **Anti-Duplikat** AKTIF.")
-    
-    active_map = MAP_TRX      
-    active_schema = SCHEMA_TRX 
-    target_table = "staging_history"
-    enable_date_filter = False
-    check_collision = True # Aktifkan Cek Bentrok
+    st.title("📚 Closing")
+    st.info(f"Sistem akan memproses per **{BATCH_SIZE} file** untuk menjaga performa.")
+    active_map = MAP_TRX; active_schema = SCHEMA_TRX; target_table = "staging_history"
+    enable_date_filter = False; check_collision = True
 
 st.divider()
 
 # ==========================================
-# 6. FILE UPLOADER & PROCESSOR
+# 6. FILE UPLOADER & BATCH PROCESSOR
 # ==========================================
 uploaded_files = st.file_uploader(f"Pilih File Excel ({selected_mode})", type=['xlsx', 'xls'], accept_multiple_files=True)
 
 if uploaded_files:
-    # --- FITUR ANTRIAN FILE (PENGGANTI PAGINATION) ---
-    st.success(f"📂 **{len(uploaded_files)} File Siap Diproses.**")
+    total_files = len(uploaded_files)
+    st.success(f"📂 **{total_files} File Siap Diproses.**")
     
-    # Buat tabel daftar file
+    # Hitung jumlah Batch
+    total_batches = math.ceil(total_files / BATCH_SIZE)
+    
+    # Tampilkan Antrian
     file_list_data = [{"No": i+1, "Nama File": f.name, "Size (KB)": round(f.size/1024, 1)} for i, f in enumerate(uploaded_files)]
-    df_queue = pd.DataFrame(file_list_data)
-    
-    # Tampilkan dengan tinggi 600px (muat +/- 20 baris)
-    with st.expander("📋 Lihat Daftar Antrian File (Klik Disini)", expanded=True):
-        st.dataframe(
-            df_queue, 
-            use_container_width=True, 
-            hide_index=True,
-            height=600 # <--- SOLUSI PAGINATION
-        )
+    with st.expander("📋 Lihat Daftar Antrian File", expanded=True):
+        st.dataframe(pd.DataFrame(file_list_data), use_container_width=True, hide_index=True, height=300)
 
-    # TOMBOL EKSEKUSI
-    if st.button(f"🚀 MULAI PROSES UPLOAD ({selected_mode})", type="primary"):
+    if st.button(f"🚀 MULAI PROSES ({total_batches} BATCH)", type="primary"):
         
-        # UI Elements
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         if show_preview:
-            st.subheader("🔍 Live Data Preview (20 Baris)")
+            st.subheader("🔍 Live Preview")
             preview_container = st.empty()
-
-        if enable_date_filter:
-            log_box = st.expander("📜 Audit Trail: Filter Tanggal", expanded=True)
         
-        # Setup GCP
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(BUCKET_NAME)
+        if enable_date_filter:
+            log_box = st.expander("📜 Log Filter", expanded=True)
+
+        # Setup Client
         bq_client = bigquery.Client()
+        bucket = storage.Client().bucket(BUCKET_NAME)
         table_ref = f"{DATASET_ID}.{target_table}"
 
-        # --- PHASE 1: RESET (Hanya untuk Mode Non-History) ---
-        if selected_mode != "📚 Cicil History Data":
-            status_text.text(f"🧹 Membersihkan Tabel Target: {target_table}...")
-            bq_client.delete_table(table_ref, not_found_ok=True)
-        
-        # Bersihkan Bucket (Selalu)
+        # --- PHASE 1: INITIAL CLEANUP ---
+        # Hapus tabel hanya jika ini batch pertama DAN bukan mode History (yang sifatnya append)
+        # Tapi karena kita mau main aman, kita handle TRUNCATE di logic batch pertama nanti.
+        # Kita bersihkan bucket dulu.
         blobs = bucket.list_blobs(prefix="upload/")
         for blob in blobs: blob.delete()
+
+        # --- PHASE 2: BATCH PROCESSING LOOP ---
+        overall_success_count = 0
         
-        progress_bar.progress(5)
-
-        # --- PHASE 2: LOOPING FILE ---
-        success_count = 0
-        total_files = len(uploaded_files)
-        collision_detected = False
-
-        for i, file in enumerate(uploaded_files):
-            try:
-                status_text.text(f"⏳ Analisis File {i+1}/{total_files}: {file.name}")
-                
-                # 1. Baca Excel
-                df = pd.read_excel(file, dtype=object, engine='openpyxl')
-                df.columns = df.columns.str.strip().str.upper()
-                df.rename(columns=active_map, inplace=True)
-
-                # --- LOGIC MODE MASTER CUSTOMER (CB) ---
-                if selected_mode == "👥 Master Customer (CB)":
-                    df['bln'] = 'DEC'
-                    fill_cols = ['fc', 'rayon', 'alamat', 'kabupaten', 'kecamatan', 'kelurahan', 'div', 'nama_salesman', 'nik_salesman']
-                    for col in fill_cols:
-                        if col in df.columns: df[col] = df[col].fillna('')
+        for batch_idx in range(total_batches):
+            # Ambil potongan file (Slicing)
+            start_idx = batch_idx * BATCH_SIZE
+            end_idx = min((batch_idx + 1) * BATCH_SIZE, total_files)
+            current_batch_files = uploaded_files[start_idx:end_idx]
+            
+            st.info(f"🔄 **Memproses Batch {batch_idx + 1} dari {total_batches}** (File {start_idx+1} s/d {end_idx})")
+            
+            batch_success_count = 0
+            
+            # --- LOOP FILE DALAM BATCH ---
+            for i, file in enumerate(current_batch_files):
+                try:
+                    status_text.text(f"⏳ Reading: {file.name}...")
                     
-                    if 'kd_salesman' in df.columns:
-                        df['kd_salesman'] = df['kd_salesman'].astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', 'N/A').str.strip()
-                    if 'tgl_register' in df.columns:
-                         df['tgl_register'] = pd.to_datetime(df['tgl_register'], errors='coerce').dt.date
+                    df = pd.read_excel(file, dtype=object, engine='openpyxl')
+                    df.columns = df.columns.str.strip().str.upper()
+                    df.rename(columns=active_map, inplace=True)
 
-                # --- LOGIC MODE TRANSAKSI / HISTORY ---
-                else:
-                    if 'tgl' in df.columns:
-                        df['tgl'] = pd.to_datetime(df['tgl'], errors='coerce').dt.date
-                        
-                        # A. Filter Tanggal (Harian Only)
-                        if enable_date_filter:
-                            initial = len(df)
-                            df = df[df['tgl'] <= cutoff_date]
-                            if (initial - len(df)) > 0: log_box.warning(f"⚠️ {file.name}: {initial - len(df)} baris DIBUANG.")
-                            else: log_box.success(f"✅ {file.name}: OK.")
+                    # --- LOGIC CB ---
+                    if selected_mode == "👥 Master Customer (CB)":
+                        df['bln'] = 'DEC'
+                        fill_cols = ['fc', 'rayon', 'alamat', 'kabupaten', 'kecamatan', 'kelurahan', 'div', 'nama_salesman', 'nik_salesman']
+                        for col in fill_cols:
+                            if col in df.columns: df[col] = df[col].fillna('')
+                        if 'kd_salesman' in df.columns:
+                            df['kd_salesman'] = df['kd_salesman'].astype(str).str.replace(r'\.0$', '', regex=True).replace('nan', 'N/A').str.strip()
+                        if 'tgl_register' in df.columns:
+                             df['tgl_register'] = pd.to_datetime(df['tgl_register'], errors='coerce').dt.date
 
-                        # B. Anti-Duplikat (History Only)
-                        if check_collision and not df.empty:
-                            min_d, max_d = df['tgl'].min(), df['tgl'].max()
-                            # Cek BigQuery
-                            check_sql = f"SELECT count(1) as cnt FROM `{DATASET_ID}.{target_table}` WHERE tgl BETWEEN '{min_d}' AND '{max_d}'"
-                            try:
-                                rows = list(bq_client.query(check_sql).result())
-                                if rows[0].cnt > 0:
-                                    if force_overwrite: # Hapus data lama
-                                        status_text.warning(f"⚠️ Mode Revisi: Menghapus data lama ({min_d} - {max_d})...")
-                                        bq_client.query(f"DELETE FROM `{DATASET_ID}.{target_table}` WHERE tgl BETWEEN '{min_d}' AND '{max_d}'").result()
-                                    else: # Tolak File
-                                        st.error(f"⛔ **SKIP {file.name}**: Data tanggal {min_d} s/d {max_d} sudah ada!")
-                                        collision_detected = True
-                                        continue # Skip file ini
-                            except Exception: pass # Tabel belum ada, aman
-
-                    # Convert Angka to Float
-                    nums = ['qty', 'value', 'value_nett']
-                    for n in nums:
-                        if n in df.columns: df[n] = pd.to_numeric(df[n], errors='coerce').fillna(0.0).astype(float)
-
-                # --- FINAL CLEANUP ---
-                valid_cols = [f.name for f in active_schema if f.name in df.columns]
-                df = df[valid_cols]
-                schema_types = {f.name: f.field_type for f in active_schema}
-                for col in df.columns:
-                    if schema_types.get(col) == 'STRING':
-                        df[col] = df[col].astype(str).str.strip().replace('nan', '').str.replace(r'\.0$', '', regex=True)
-                        if col in ['pma', 'kode_outlet', 'fc', 'plan', 'channel']: df[col] = df[col].str.upper()
-
-                # Preview
-                if show_preview: preview_container.dataframe(df.head(20), use_container_width=True)
-
-                # Upload Parquet
-                if not df.empty:
-                    temp_filename = f"part_{i}.parquet"
-                    df.to_parquet(temp_filename, index=False)
-                    bucket.blob(f"upload/{temp_filename}").upload_from_filename(temp_filename)
-                    os.remove(temp_filename)
-                    success_count += 1
-                
-                del df; gc.collect()
-                progress_bar.progress(10 + int((i+1) / total_files * 80))
-                
-            except Exception as e:
-                st.error(f"❌ Gagal {file.name}: {e}")
-
-        # --- PHASE 3: FINAL LOAD ---
-        if success_count > 0:
-            status_text.text(f"📥 Loading ke BigQuery ({target_table})...")
-            
-            # Logic Append vs Truncate
-            write_action = "WRITE_TRUNCATE"
-            if selected_mode == "📚 Cicil History Data":
-                write_action = "WRITE_APPEND" # Karena append, tadi di atas ada collision check
-
-            job_config = bigquery.LoadJobConfig(
-                source_format=bigquery.SourceFormat.PARQUET,
-                write_disposition=write_action,
-                schema=active_schema,
-                autodetect=False 
-            )
-            
-            try:
-                load_job = bq_client.load_table_from_uri(f"gs://{BUCKET_NAME}/upload/*.parquet", table_ref, job_config=job_config)
-                load_job.result()
-                
-                # Cleanup
-                for blob in bucket.list_blobs(prefix="upload/"): blob.delete()
-                
-                progress_bar.progress(100)
-                st.balloons()
-                
-                if collision_detected:
-                    st.warning("⚠️ Proses Selesai. Ada file yang di-SKIP karena duplikat (Cek pesan error di atas).")
-                else:
-                    if write_action == "WRITE_APPEND":
-                        st.success(f"🎉 SUKSES! Data berhasil DITAMBAHKAN ke `{target_table}`.")
+                    # --- LOGIC TRX/HISTORY ---
                     else:
-                        st.success(f"🎉 SUKSES! Data `{target_table}` berhasil DI-REPLACE (TIMPA).")
+                        if 'tgl' in df.columns:
+                            df['tgl'] = pd.to_datetime(df['tgl'], errors='coerce').dt.date
+                            
+                            # Filter Tanggal (Harian)
+                            if enable_date_filter:
+                                df = df[df['tgl'] <= cutoff_date]
+
+                            # Cek Duplikat (History) - Check per file
+                            if check_collision and not df.empty:
+                                min_d, max_d = df['tgl'].min(), df['tgl'].max()
+                                # Cek BQ
+                                check_sql = f"SELECT count(1) as cnt FROM `{DATASET_ID}.{target_table}` WHERE tgl BETWEEN '{min_d}' AND '{max_d}'"
+                                try:
+                                    rows = list(bq_client.query(check_sql).result())
+                                    if rows[0].cnt > 0:
+                                        if force_overwrite:
+                                            bq_client.query(f"DELETE FROM `{DATASET_ID}.{target_table}` WHERE tgl BETWEEN '{min_d}' AND '{max_d}'").result()
+                                        else:
+                                            st.error(f"⛔ SKIP {file.name}: Data {min_d} s/d {max_d} sudah ada.")
+                                            continue 
+                                except: pass
+
+                        # Convert Angka
+                        nums = ['qty', 'value', 'value_nett']
+                        for n in nums:
+                            if n in df.columns: df[n] = pd.to_numeric(df[n], errors='coerce').fillna(0.0).astype(float)
+
+                    # Final Clean
+                    valid_cols = [f.name for f in active_schema if f.name in df.columns]
+                    df = df[valid_cols]
+                    schema_types = {f.name: f.field_type for f in active_schema}
+                    for col in df.columns:
+                        if schema_types.get(col) == 'STRING':
+                            df[col] = df[col].astype(str).str.strip().replace('nan', '').str.replace(r'\.0$', '', regex=True)
+                            if col in ['pma', 'kode_outlet', 'fc', 'plan']: df[col] = df[col].str.upper()
+
+                    if show_preview and i==0: preview_container.dataframe(df.head(5), use_container_width=True)
+
+                    if not df.empty:
+                        temp_filename = f"part_{batch_idx}_{i}.parquet"
+                        df.to_parquet(temp_filename, index=False)
+                        bucket.blob(f"upload/{temp_filename}").upload_from_filename(temp_filename)
+                        os.remove(temp_filename)
+                        batch_success_count += 1
+                        overall_success_count += 1
                     
-            except Exception as e:
-                st.error(f"BigQuery Error: {e}")
+                    del df; gc.collect()
+                    
+                except Exception as e:
+                    st.error(f"❌ Gagal {file.name}: {e}")
+
+            # --- END OF BATCH: UPLOAD TO BIGQUERY SEKARANG JUGA ---
+            # Supaya memori lega dan browser tidak timeout nunggu terlalu lama
+            if batch_success_count > 0:
+                status_text.text(f"📥 Mengirim Batch {batch_idx + 1} ke BigQuery...")
+                
+                # LOGIC WRITE DISPOSITION (KUNCI ESTAFET)
+                # Jika Mode History -> SELALU APPEND
+                # Jika Mode Harian/CB -> Batch 1 (TRUNCATE), Batch 2..dst (APPEND)
+                
+                if selected_mode == "📚 Cicil History Data":
+                    write_action = "WRITE_APPEND"
+                else:
+                    # Untuk Harian/CB: Batch pertama menghapus, batch selanjutnya menambah
+                    if batch_idx == 0:
+                        write_action = "WRITE_TRUNCATE"
+                    else:
+                        write_action = "WRITE_APPEND"
+
+                job_config = bigquery.LoadJobConfig(
+                    source_format=bigquery.SourceFormat.PARQUET,
+                    write_disposition=write_action,
+                    schema=active_schema,
+                    autodetect=False 
+                )
+                
+                try:
+                    # Load semua parquet yang ada di bucket (milik batch ini)
+                    load_job = bq_client.load_table_from_uri(f"gs://{BUCKET_NAME}/upload/*.parquet", table_ref, job_config=job_config)
+                    load_job.result()
+                    
+                    # Langsung hapus sampah di bucket biar Batch selanjutnya bersih
+                    blobs = bucket.list_blobs(prefix="upload/")
+                    for blob in blobs: blob.delete()
+                    
+                except Exception as e:
+                    st.error(f"Gagal Upload Batch {batch_idx+1}: {e}")
+            
+            # Update Global Progress
+            progress_bar.progress(int((batch_idx + 1) / total_batches * 100))
+        
+        # --- SELESAI SEMUA BATCH ---
+        if overall_success_count > 0:
+            st.balloons()
+            st.success(f"🎉 SELESAI! Total {overall_success_count} file berhasil diproses dalam {total_batches} batch.")
         else:
-            if collision_detected:
-                st.error("⛔ Proses Dihentikan. Semua file terdeteksi Duplikat.")
-            else:
-                st.warning("Tidak ada data yang diproses.")
-
-
+            st.warning("Tidak ada data yang berhasil masuk.")
