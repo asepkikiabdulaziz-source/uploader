@@ -12,7 +12,7 @@ from google.cloud import storage, bigquery
 # 1. KONFIGURASI HALAMAN
 # ==========================================
 st.set_page_config(
-    page_title="UPLOADER, 
+    page_title="UPLOADER", 
     page_icon="🏢", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -330,3 +330,4 @@ if uploaded_files:
             st.success(f"🎉 SELESAI! Total {overall_success_count} file berhasil diproses dalam {total_batches} batch.")
         else:
             st.warning("Tidak ada data yang berhasil masuk.")
+
