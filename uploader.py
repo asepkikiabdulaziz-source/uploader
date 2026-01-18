@@ -130,7 +130,7 @@ with st.sidebar:
         default_date = datetime.now().date() - timedelta(days=1)
         cutoff_date = st.date_input("Cut-Off Tanggal:", value=default_date)
 
-    if selected_mode == "📚 Cicil History Data":
+    if selected_mode == "📚 Closing":
         st.markdown("### ⚙️ Opsi History")
         force_overwrite = st.checkbox("⚠️ Mode Revisi (Timpa Data)", value=False)
     
@@ -297,4 +297,5 @@ if uploaded_files:
             st.success(f"🎉 Sukses! {overall_success} File berhasil diproses.")
         else:
             st.warning("Tidak ada data yang masuk.")
+
 
