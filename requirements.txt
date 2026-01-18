@@ -1,6 +1,7 @@
 streamlit
 pandas
+openpyxl
 google-cloud-storage
 google-cloud-bigquery
 pyarrow
-openpyxl
+db-dtypes
