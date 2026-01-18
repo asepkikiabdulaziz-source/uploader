@@ -110,8 +110,8 @@ SCHEMA_CUST = [
 # 4. SIDEBAR NAVIGASI
 # ==========================================
 with st.sidebar:
-    st.title("🏢 Admin SFA")
-    st.write("Pilih Modul Kerja:")
+    st.title("🏢 Admin Upload")
+    st.write("Pilih Modul:")
     
     selected_mode = st.radio(
         "Menu Navigasi",
@@ -366,4 +366,5 @@ if uploaded_files:
                 st.error("⛔ Proses Dihentikan. Semua file terdeteksi Duplikat.")
             else:
                 st.warning("Tidak ada data yang diproses.")
+
 
