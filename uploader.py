@@ -145,8 +145,8 @@ target_table = ""
 enable_date_filter = False
 check_collision = False
 
-if selected_mode == "🚀 Transaksi Harian":
-    st.title("🚀 Upload Transaksi Harian")
+if selected_mode == "🚀 Transaksi Berjalan":
+    st.title("🚀 Upload Transaksi berjalan")
     active_map = MAP_TRX; active_schema = SCHEMA_TRX; target_table = "berjalan"
     enable_date_filter = True; check_collision = False
     if cutoff_date: st.write(f"Filter Aktif: Data > **{cutoff_date.strftime('%d %b %Y')}** dibuang.")
@@ -156,8 +156,8 @@ elif selected_mode == "👥 Master Customer (CB)":
     active_map = MAP_CUST; active_schema = SCHEMA_CUST; target_table = "staging_cb"
     enable_date_filter = False; check_collision = False
 
-elif selected_mode == "📚 Cicil History Data":
-    st.title("📚 Upload History Data")
+elif selected_mode == "📚 Closing":
+    st.title("📚 Closing")
     active_map = MAP_TRX; active_schema = SCHEMA_TRX; target_table = "staging_history"
     enable_date_filter = False; check_collision = True
 
@@ -297,5 +297,6 @@ if uploaded_files:
             st.success(f"🎉 Sukses! {overall_success} File berhasil diproses.")
         else:
             st.warning("Tidak ada data yang masuk.")
+
 
 
