@@ -37,7 +37,7 @@ except Exception as e:
 # ==========================================
 # 3. KONSTANTA & SCHEMA DATABASE
 # ==========================================
-BUCKET_NAME = "transaksi-upload 
+BUCKET_NAME = "transaksi-upload" 
 DATASET_ID = "pma"
 
 # --- A. SCHEMA TRANSAKSI (PENJUALAN) ---
@@ -366,3 +366,4 @@ if uploaded_files:
                 st.error("⛔ Proses Dihentikan. Semua file terdeteksi Duplikat.")
             else:
                 st.warning("Tidak ada data yang diproses.")
+
