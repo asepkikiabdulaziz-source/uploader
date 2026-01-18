@@ -277,7 +277,7 @@ if uploaded_files:
                 status_text.text(f"📥 Mengirim Batch {batch_idx + 1} ke BigQuery...")
                 
                 write_action = "WRITE_APPEND"
-                if selected_mode != "📚 Cicil History Data" and batch_idx == 0:
+                if selected_mode != "📚 Closing" and batch_idx == 0:
                     write_action = "WRITE_TRUNCATE"
 
                 job_config = bigquery.LoadJobConfig(source_format=bigquery.SourceFormat.PARQUET, write_disposition=write_action, schema=active_schema, autodetect=False)
@@ -297,6 +297,7 @@ if uploaded_files:
             st.success(f"🎉 Sukses! {overall_success} File berhasil diproses.")
         else:
             st.warning("Tidak ada data yang masuk.")
+
 
 
 
